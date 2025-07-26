@@ -23,11 +23,11 @@ El sistema incluye:
 ### Base de Datos
 - **PostgreSQL 17.4**
 
----
+
 
 ## 📂 Estructura del Proyecto
 
-```
+
 📁 Proyecto_Asignacion
 │
 ├── integrated_app.py               # Ejecución principal de la optimización
