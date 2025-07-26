@@ -3,10 +3,13 @@
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.46+-brightgreen.svg)](https://streamlit.io/)  
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17+-blue.svg)](https://www.postgresql.org/)  
 [![Estado](https://img.shields.io/badge/Estado-Activo-success.svg)](#)  
+## Dirección 
+- **Directora del proyecto:** Dra. Andrea Giménez.
 
 ## Desarrolladores
 - **Tutor Investigador:** Dr. Fabio Lopez  
-- **Investigadora en formación:** Ing. Eliana Telesca  
+- **Investigadora en formación:** Ing. Eliana Telesca
+
 
 ## Descripción
 Este proyecto implementa un sistema interactivo para la asignación multiobjetivo de estudiantes y docentes a instituciones educativas.  
