@@ -80,3 +80,11 @@ streamlit run integrated_viewer_optimizado.py
 3. Realiza tus cambios siguiendo el estándar de comentarios (PEP 257).  
 4. Envía un pull request describiendo los cambios realizados.
 
+Vista del sistema integrado
+<img width="1887" height="782" alt="image" src="https://github.com/user-attachments/assets/e18c7d73-a632-4d7f-b2fd-10802aa5fe02" />
+<img width="1884" height="401" alt="image" src="https://github.com/user-attachments/assets/6be4a835-443a-4a72-bb6e-27e579bdae1d" />
+Cuando de damos en ejecutar la optimizacion: 
+<img width="1889" height="390" alt="image" src="https://github.com/user-attachments/assets/29da7914-1995-4ef9-9e05-9fae1b35c9c4" />
+Muestra del resultado
+
+
