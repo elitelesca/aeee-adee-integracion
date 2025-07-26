@@ -4,6 +4,9 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17+-blue.svg)](https://www.postgresql.org/)  
 [![Estado](https://img.shields.io/badge/Estado-Activo-success.svg)](#)  
 
+## Dirección 
+- **Directora del proyecto:** Dra. Andrea Giménez.
+
 ## Desarrolladores
 - **Tutor Investigador:** Dr. Fabio Lopez  
 - **Investigadora en formación:** Ing. Eliana Telesca  
