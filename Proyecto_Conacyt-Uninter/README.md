@@ -1,69 +1,41 @@
-# 📊 AEEE-ADEE WebSystem
-**Sistema de Asignación Multiobjetivo de Estudiantes y Docentes a Instituciones Educativas**
+# Proyecto Conacyt-Uninter  
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)  
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.46+-brightgreen.svg)](https://streamlit.io/)  
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17+-blue.svg)](https://www.postgresql.org/)  
+[![Estado](https://img.shields.io/badge/Estado-Activo-success.svg)](#)  
 
-## 📌 Descripción
-Este proyecto implementa un sistema completo de optimización multiobjetivo para asignar estudiantes a docentes e instituciones educativas, minimizando distancias y balanceando la carga de las clases.  
-El sistema incluye:  
-✅ **Optimización multiobjetivo** con algoritmos evolutivos (NSGA-II, Pymoo).  
-✅ **Base de datos PostgreSQL** para almacenar estudiantes, docentes, instituciones y asignaciones.  
-✅ **Visualización interactiva** con Streamlit, mapas dinámicos y exportación a Excel.  
-✅ **Ejecución automática de la optimización** y actualización de asignaciones en la base de datos.
+## Desarrolladores
+- **Tutor Investigador:** Dr. Fabio Lopez  
+- **Investigadora en formación:** Ing. Eliana Telesca  
 
----
+## Descripción
+Este proyecto implementa un sistema interactivo para la asignación multiobjetivo de estudiantes y docentes a instituciones educativas.  
+Utiliza algoritmos evolutivos NSGA-II para minimizar distancias, balancear clases y reducir la carga docente, respetando restricciones de capacidad de las instituciones.  
 
-## ⚙️ Tecnologías Utilizadas
+## Características
+✅ Mapa interactivo con estudiantes (azul), docentes (verde) e instituciones (rojo).  
+✅ Ejecución de optimización desde consola o interfaz web.  
+✅ Exportación de asignaciones actuales y optimizadas a Excel.  
+✅ Código modular con buenas prácticas y documentación estandarizada.  
 
-### Lenguaje y Frameworks
-- **Python 3.13.1**  
-- **Streamlit** (interfaz web)  
-- **Pymoo** (algoritmos evolutivos)  
-- **Folium y Plotly** (visualización de datos geográficos)  
-- **SQLAlchemy y psycopg2** (conexión a PostgreSQL)
-
-### Base de Datos
-- **PostgreSQL 17.4**
-
-
-
-## 📂 Estructura del Proyecto
-
-
-📁 Proyecto_Asignacion
-│
-├── integrated_app.py               # Ejecución principal de la optimización
-├── integrated_viewer_optimizado.py # Interfaz web con Streamlit
-├── integrated_problem.py           # Definición del problema de optimización
-├── integrated_optimization.py      # Algoritmo de optimización y guardado en BD
-├── database.py                      # Carga de datos desde la BD
-├── requirements.txt                 # Librerías necesarias
-├── .env                             # Configuración de conexión a la BD
-└── README.md                        # Este archivo
+## Estructura del Proyecto
+```
+/database.py                     # Conexión y carga de datos desde PostgreSQL
+/integrated_app.py               # Ejecución por consola de la optimización
+/integrated_optimization.py      # Lógica de optimización y guardado en BD
+/integrated_problem.py           # Definición del problema multiobjetivo
+/integrated_viewer_optimizado.py # Interfaz web interactiva con Streamlit
+/requirements.txt                # Librerías necesarias
+/.env                            # Variables de entorno
 ```
 
----
+## Instalación y Uso
 
-## 🗄️ Configuración de la Base de Datos
-
-1. Crear una base de datos PostgreSQL llamada `Asignacion_MEC`.  
-2. Configurar las credenciales en el archivo `.env`:
-   ```
-   DB_USER=postgres
-   DB_PASSWORD=Admin.123
-   DB_HOST=localhost
-   DB_PORT=5432
-   DB_NAME=Asignacion_MEC
-   ```
-3. Cargar las tablas necesarias (`estudiantes`, `docentes`, `clases`, `establecimientos`, `instituciones`, `asignacion_mec`).
-
----
-
-## 🚀 Instalación y Ejecución
-
-### 1. Crear y activar entorno virtual
+### 1. Crear entorno virtual (opcional)
 ```bash
 python -m venv venv
 source venv/bin/activate   # Linux/Mac
-venv\Scripts\activate      # Windows
+venv\Scripts\activate    # Windows
 ```
 
 ### 2. Instalar dependencias
@@ -71,51 +43,50 @@ venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 ```
 
-### 3. Verificar conexión a la BD
-```bash
-python -c "from database import test_conexion; test_conexion()"
+### 3. Configurar variables de entorno
+Crea un archivo .env con el siguiente contenido:
 ```
+DB_USER=postgres
+DB_PASSWORD=tu_password
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=Asignacion_MEC
+```
+### 4. Ejecutar el sistema
 
-### 4. Ejecutar optimización desde consola
+**Optimización por consola:**
 ```bash
 python integrated_app.py
 ```
-
-### 5. Iniciar interfaz web
+**Visualización y Optimización Web:**
 ```bash
 streamlit run integrated_viewer_optimizado.py
 ```
+## Ejemplo de Uso
+### Optimización por Consola
+```
+📊 Mejor solución encontrada:
+   ➤ Distancia total: 120.45 km
+   ➤ Balance (desvío): 3.2145
+```
+### Interfaz Web
+- Pestaña Visualización Actual: muestra asignaciones guardadas y mapa interactivo.  
+- Pestaña Optimización: permite ejecutar la optimización y exportar resultados.  
 
-Abrir en el navegador:  
-`http://localhost:8501`
+## Contribución
+¡Las contribuciones son bienvenidas!  
+1. Realiza un **fork** del repositorio.  
+2. Crea una nueva rama (`git checkout -b feature/nueva-funcionalidad`).  
+3. Realiza tus cambios siguiendo el estándar de comentarios (PEP 257).  
+4. Envía un pull request describiendo los cambios realizados.
 
----
+### Visualización del sistema
+1. Vista inicial del sistema AEEE-ADEE Integrado:
+<img width="1887" height="782" alt="image" src="https://github.com/user-attachments/assets/e18c7d73-a632-4d7f-b2fd-10802aa5fe02" />
+<img width="1884" height="401" alt="image" src="https://github.com/user-attachments/assets/6be4a835-443a-4a72-bb6e-27e579bdae1d" />
+2. Ejecución de la optimización: 
+<img width="1889" height="390" alt="image" src="https://github.com/user-attachments/assets/29da7914-1995-4ef9-9e05-9fae1b35c9c4" />
+3. Resultados de la optimización:
+<img width="1892" height="844" alt="image" src="https://github.com/user-attachments/assets/854f5deb-2b5f-4d85-9603-70240257da78" />
 
-## 🧠 Funcionamiento General
 
-1. **Carga de Datos**  
-   - Los datos se extraen automáticamente de la BD con `cargar_datos_desde_db()`.
-
-2. **Optimización**  
-   - `IntegratedProblem` define las variables, objetivos y restricciones.  
-   - `run_integrated_optimization` ejecuta el algoritmo NSGA-II y guarda los resultados en `asignacion_mec`.
-
-3. **Visualización**  
-   - Mapas interactivos con estudiantes (azul), docentes (verde) e instituciones (rojo).  
-   - Exportación de asignaciones a Excel.
-
----
-
-## 📊 Objetivos de Optimización
-- **F1:** Minimizar la distancia total (estudiante-docente-institución).  
-- **F2:** Minimizar el desbalance en la distribución de estudiantes por clase.  
-- **Restricciones:**  
-  - Capacidad máxima de clases.  
-  - Asignación válida de docentes.
-
----
-
-## ✨ Próximas Mejoras
-- Incorporar más algoritmos (MOEAD, RVEA, etc.).  
-- Visualización de **líneas de asignación dinámicas** en el mapa.  
-- Filtros avanzados por departamento, ciudad y barrio.
