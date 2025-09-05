@@ -3,7 +3,7 @@
 # Proyecto Conacyt-Uninter
 # Tutor investigador: Dr. Fabio Lopez 
 # Investigador en formacion: Ing. Eliana Telesca
-# Versión: 1.1
+# Versión: 1.2
 # Descripción:
 #     Script principal para ejecutar la optimización de asignaciones
 #     educativas. Carga datos desde la base de datos, define el
