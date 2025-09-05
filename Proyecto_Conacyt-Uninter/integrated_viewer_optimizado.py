@@ -4,10 +4,7 @@
 # Tutor investigador: Dr. Fabio Lopez
 # Investigador en formación: Ing. Eliana Telesca
 # Versión: 1.2
-#  - Filtros + tabla + mapa en Optimización (igual a Visualización)
-#  - Líneas Estudiante->Establecimiento (color por turno) y Docente->Establecimiento (verde)
-#  - Toggles para mostrar/ocultar líneas y submuestreo (1 de cada n)
-#  - Límite máximo de líneas por rendimiento
+#  - Filtros + tabla + mapa en Optimización
 #  - Fix turno string/int, width="stretch" en dataframes
 # ================================================================
 
