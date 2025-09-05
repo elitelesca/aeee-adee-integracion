@@ -19,6 +19,7 @@ import pandas as pd
 from database import engine, cargar_datos_desde_db
 from integrated_problem import IntegratedProblem
 from integrated_optimization import run_integrated_optimization
+from integrated_optimization import select_best_individual
 
 # ================================
 # CONFIGURACIÓN LOGGING
@@ -29,12 +30,13 @@ logger.setLevel(logging.INFO)
 PROJECT_ROOT = Path(__file__).parent
 sys.path.append(str(PROJECT_ROOT))
 
+
 def cargar_asignaciones():
     """
     Carga las asignaciones actuales desde la base de datos.
 
     Returns:
-        DataFrame: Tabla con asignaciones actuales desde 'asignacion_mec'.
+        pd.DataFrame: Asignaciones actuales o DataFrame vacío si falla.
     """
     try:
         return pd.read_sql("SELECT * FROM asignacion_mec", engine)
@@ -42,16 +44,11 @@ def cargar_asignaciones():
         logger.error(f"Error cargando asignaciones: {e}")
         return pd.DataFrame()
 
+
 def main():
     """
-    Función principal que ejecuta el flujo completo:
-
-    1. Carga de datos desde la base de datos.
-    2. Ejecución del algoritmo de optimización.
-    3. Impresión de la mejor solución encontrada.
-
-    Raises:
-        ValueError: Si los datos necesarios no se cargan correctamente.
+    Función principal para cargar datos, ejecutar la optimización
+    y mostrar los resultados en consola.
     """
     # ================================
     # CARGAR DATOS DESDE BD
@@ -76,9 +73,9 @@ def main():
 
     result = run_integrated_optimization(
         problem,
-        pop_size=50,    # TODO: Ajustar según rendimiento deseado.
-        n_gen=30,       # TODO: Ajustar número de generaciones según calidad esperada.
-        n_procs=4,      # TODO: Ajustar paralelismo según capacidad de hardware.
+        pop_size=50,    # Ajustable: tamaño de la población
+        n_gen=30,       # Ajustable: número de generaciones
+        n_procs=4,      # Ajustable: número de procesos paralelos
         db_config={
             "user": "postgres",
             "password": "Admin.123",
@@ -88,18 +85,22 @@ def main():
         }
     )
 
-    # ================================
-    # MOSTRAR RESULTADOS
-    # ================================
-    if result.F is not None and len(result.F) > 0:
-        best_idx = result.F[:, 0].argmin()  # Seleccionamos según el primer objetivo
-        print("\n📊 ✅ Mejor solución encontrada:")
-        print(f"   ➤ Balance Clases: {result.F[best_idx, 0]:.2f}")
-        print(f"   ➤ Distancia Estudiantes: {result.F[best_idx, 1]:.2f} km")
-        print(f"   ➤ Distancia Docentes: {result.F[best_idx, 2]:.2f} km")
-        print(f"   ➤ Penalización Turnos: {result.F[best_idx, 3]:.2f}")
-    else:
-        print("\n⚠️ No se encontraron soluciones válidas en esta ejecución.")
+    logger.info("✅ Optimización completada")   
+    try:
+        _, _, best_F = select_best_individual(result)
+        if best_F is not None:
+            print("📊 Mejor solución encontrada:")
+            print(f"   ➤ f0: {best_F[0]:.4f}")
+        if len(best_F) > 1:
+            print(f"   ➤ f1: {best_F[1]:.4f}")
+        if len(best_F) > 2:
+            print(f"   ➤ f2: {best_F[2]:.4f}")
+        if len(best_F) > 3:
+            print(f"   ➤ f3: {best_F[3]:.4f}")
+        else:
+            print("📊 Mejor solución encontrada (elegida por menor violación de restricciones; F no disponible).")
+    except Exception as e:
+            logger.error(f"No se pudo resumir la mejor solución: {e}")
 
 
 if __name__ == "__main__":
