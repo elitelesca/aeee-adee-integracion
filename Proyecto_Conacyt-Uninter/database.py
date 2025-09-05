@@ -42,9 +42,7 @@ DB_URI = (
 )
 engine = create_engine(DB_URI)
 
-# ================================
-# FUNCIÓN PARA CARGAR DATOS
-# ================================
+
 def cargar_datos_desde_db():
     """
     Carga estudiantes, docentes, clases y establecimientos con unión de instituciones.
@@ -73,14 +71,13 @@ def cargar_datos_desde_db():
         """, engine)
 
         clases = pd.read_sql("""
-        SELECT 
-            c.id AS clase_id,
-            c.grado, c.turno, c.capacidad,
-            c.establecimiento_id,
-            e.lat, e.lng,
-            i.departamento, i.localidad, i.barrio,
-            i.nombre AS nombre_institucion,
-            e.institucion_id
+            SELECT 
+                c.id AS clase_id,
+                c.grado, c.turno, c.capacidad,
+                c.establecimiento_id,
+                e.lat, e.lng,
+                i.nombre AS nombre_institucion,
+                e.institucion_id
             FROM clases c
             JOIN establecimientos e ON c.establecimiento_id = e.id
             JOIN instituciones i ON e.institucion_id = i.id
