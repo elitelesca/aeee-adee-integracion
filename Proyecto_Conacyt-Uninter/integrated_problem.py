@@ -11,7 +11,6 @@
 # Dependencias:
 #     numpy, pandas, pymoo, logging
 # ================================================================
-
 import numpy as np
 from pymoo.core.problem import ElementwiseProblem
 import logging
@@ -21,24 +20,27 @@ logger = logging.getLogger("integrated_problem")
 logger.setLevel(logging.INFO)
 
 class IntegratedProblem(ElementwiseProblem):
-    def __init__(self, estudiantes, docentes, clases, max_distance=40):
-        """
-        Problema de optimización integrado (Docente + Estudiante + Clase).
-        Combina la lógica ADEE (docentes) y AEEE (estudiantes).
+    """
+    Decisión:
+      - XA: n_estudiantes enteros en [0, n_clases-1]  => estudiante -> clase
+      - XD_class: n_clases enteros en [0, n_docentes] => docente por clase
+            * n_docentes = "SIN DOCENTE" (solo permitido si la clase no tiene alumnos)
+    Objetivos:
+      - F1: Distancia promedio (estudiante->establecimiento) + (docente->establecimiento en clases activas)
+      - F2: Desvío estándar de carga (alumnos por clase)
+      - F3: -(proporción de docentes con 2 clases en el mismo establecimiento)  [se minimiza]
+    Restricciones (G >= 0 viola):
+      - g1: Exceso de capacidad por clase (suma de overflow)
+      - g2: Clases activas sin docente asignado
+      - g3: Docentes con más de 2 clases asignadas
+      - g4: Si un docente tiene 2 clases, turnos deben ser distintos
+      - g5: Incompatibilidades grado (estudiante != grado clase)
+    """
 
-        Args:
-            estudiantes (pd.DataFrame): Datos de estudiantes (lat, lng, etc.)
-            docentes (pd.DataFrame): Datos de docentes (lat, lng, etc.)
-            clases (pd.DataFrame): Datos de clases (capacidad, lat, lng, etc.)
-            max_distance (float): Distancia máxima permitida para asignar docente.
-
-        Raises:
-            ValueError: Si los DataFrames están vacíos.
-        """
+    def __init__(self, estudiantes, docentes, clases):
         if estudiantes.empty or docentes.empty or clases.empty:
-            raise ValueError("❌ Los DataFrames no pueden estar vacíos")
+            raise ValueError("❌ Los DataFrames de entrada no pueden estar vacíos")
 
-        # Resetear índices para evitar problemas con iterrows
         estudiantes = estudiantes.reset_index(drop=True)
         docentes = docentes.reset_index(drop=True)
         clases = clases.reset_index(drop=True)
@@ -52,168 +54,153 @@ class IntegratedProblem(ElementwiseProblem):
         self.n_estudiantes = len(estudiantes)
         self.n_docentes = len(docentes)
         self.n_clases = len(clases)
-        self.max_distance = max_distance # Distancia máxima permitida docente ↔ establecimiento
 
-        # Variables de decisión (2 por estudiante: docente + clase)
-        n_var = self.n_estudiantes * 2
+        # Vector de decisión: XA (n_est), XD_class (n_clases)
+        n_var = self.n_estudiantes + self.n_clases
+
+        xl = np.concatenate([
+            np.zeros(self.n_estudiantes, dtype=int),
+            np.zeros(self.n_clases, dtype=int)
+        ])
+        xu = np.concatenate([
+            np.full(self.n_estudiantes, self.n_clases - 1, dtype=int),
+            np.full(self.n_clases, self.n_docentes, dtype=int)  # include "sin docente"
+        ])
 
         super().__init__(
             n_var=n_var,
-            n_obj=4,    # 4 objetivos: AEEE(f1,f2) + ADEE(f1,f2)
-            n_constr=3, # Restricciones: capacidad, docente válido, distancia máxima
-            xl=np.zeros(n_var),
-            xu=np.concatenate([
-                np.full(self.n_estudiantes, self.n_docentes - 1),
-                np.full(self.n_estudiantes, self.n_clases - 1)
-            ]),
+            n_obj=3,            # <<<<<<<<<<<<< antes: 2
+            n_constr=5,
+            xl=xl,
+            xu=xu,
             elementwise=True
         )
 
     def _validar_dataframes(self, estudiantes, docentes, clases):
-        required_est = {'lat', 'lng', 'nombre'}
-        required_doc = {'lat', 'lng', 'nombre'}
-        required_cls = {'lat', 'lng', 'grado', 'turno', 'capacidad'}
+        req_est = {'lat', 'lng', 'nombre', 'grado'}
+        req_doc = {'lat', 'lng', 'nombre'}
+        req_cls = {'lat', 'lng', 'grado', 'turno', 'capacidad', 'establecimiento_id', 'institucion_id'}
 
-        if not required_est.issubset(estudiantes.columns):
-            missing = required_est - set(estudiantes.columns)
-            raise ValueError(f"❌ Estudiantes faltan columnas: {missing}")
+        def faltantes(df, req):
+            return req - set(df.columns)
 
-        if not required_doc.issubset(docentes.columns):
-            missing = required_doc - set(docentes.columns)
-            raise ValueError(f"❌ Docentes faltan columnas: {missing}")
+        me = faltantes(estudiantes, req_est)
+        md = faltantes(docentes, req_doc)
+        mc = faltantes(clases, req_cls)
 
-        if not required_cls.issubset(clases.columns):
-            missing = required_cls - set(clases.columns)
-            raise ValueError(f"❌ Clases faltan columnas: {missing}")
+        errores = []
+        if me: errores.append(f"Estudiantes faltan columnas: {me}")
+        if md: errores.append(f"Docentes faltan columnas: {md}")
+        if mc: errores.append(f"Clases faltan columnas: {mc}")
+        if errores:
+            raise ValueError("❌ " + " | ".join(errores))
 
     def _evaluate(self, x, out, *args, **kwargs):
-        """
-        Evalúa una solución candidata calculando objetivos y restricciones.
-
-        Args:
-            x (np.ndarray): Vector de decisión [docente_idx, clase_idx].
-            out (dict): Diccionario con objetivos y restricciones.
-
-        Returns:
-            None. Modifica `out` con:
-                F (list): [balance_clases, dist_estudiante, dist_docente, penalizacion_turnos]
-                G (list): [capacidad_excedida, docentes_invalidos, distancia_maxima]
-        """
         try:
-            n = self.n_estudiantes
-            asign_docentes = x[:n].astype(int)
-            asign_clases = x[n:].astype(int)
+            nE = self.n_estudiantes
+            XA = x[:nE].astype(int)              # estudiante -> clase
+            XD_class = x[nE:].astype(int)        # docente por clase (n_docentes = sin docente)
 
-            total_dist = 0.0
-            clases_count = np.zeros(self.n_clases)
-            docentes_count = np.zeros(self.n_docentes)
-            
-            # ============================
-            # Objetivos combinados ADEE + AEEE
-            # ============================
+            # --- Cargas por clase y activación ---
+            clase_alumnos = np.zeros(self.n_clases, dtype=int)
+            for i, clase_idx in enumerate(XA):
+                clase_alumnos[clase_idx] += 1
+            clase_activa = clase_alumnos > 0
 
-            # AEEE f1: Balance de estudiantes por clase (equilibrio)
-            for c in asign_clases:
-                clases_count[c % self.n_clases] += 1
-            f1_balance_clases = np.mean(np.abs(30 - clases_count))
+            # --- g1: capacidad ---
+            overflow = 0.0
+            for l in range(self.n_clases):
+                cap = int(self.clases.iloc[l]["capacidad"])
+                if clase_alumnos[l] > cap:
+                    overflow += (clase_alumnos[l] - cap)
+            g1 = overflow
 
-            # AEEE f2: Distancia estudiante ↔ establecimiento
-            f2_dist_estudiante_clase = 0.0
-            for i, est in self.estudiantes.iterrows():
-                clase_idx = asign_clases[i] % self.n_clases
-                clase = self.clases.iloc[clase_idx]
-                f2_dist_estudiante_clase += self._calcular_distancia(
-                    (est["lat"], est["lng"]),
-                    (clase["lat"], clase["lng"])
-                )
-            f2_dist_estudiante_clase /= self.n_estudiantes
+            # --- g2: clase activa sin docente ---
+            sin_docente_activas = 0
+            for l in range(self.n_clases):
+                if clase_activa[l] and XD_class[l] == self.n_docentes:
+                    sin_docente_activas += 1
+            g2 = sin_docente_activas
 
-            # ADEE f1: Distancia docente ↔ establecimiento
-            f3_dist_docente_establecimiento = 0.0
-            for i in range(self.n_estudiantes):
-                docente_idx = asign_docentes[i] % self.n_docentes
-                clase_idx = asign_clases[i] % self.n_clases
-                docente = self.docentes.iloc[docente_idx]
-                clase = self.clases.iloc[clase_idx]
-                f3_dist_docente_establecimiento += self._calcular_distancia(
-                    (docente["lat"], docente["lng"]),
-                    (clase["lat"], clase["lng"])
-                )
-            f3_dist_docente_establecimiento /= self.n_estudiantes
+            # --- g3: máx 2 clases por docente ---
+            clases_por_docente = np.zeros(self.n_docentes, dtype=int)
+            for l in range(self.n_clases):
+                d = XD_class[l]
+                if d < self.n_docentes:
+                    clases_por_docente[d] += 1
+            exceso_doc = np.sum(np.maximum(0, clases_por_docente - 2))
+            g3 = exceso_doc
 
-            # ADEE f2: Penalización docentes con dos turnos en el mismo establecimiento
-            # (Evita sobrecarga docente)
-            docentes_turnos = {}
-            f4_penalizacion_turnos = 0
-            for i in range(self.n_estudiantes):
-                docente_idx = asign_docentes[i] % self.n_docentes
-                clase_idx = asign_clases[i] % self.n_clases
-                establecimiento = self.clases.iloc[clase_idx]["establecimiento_id"]
+            # --- g4: 2 clases de un docente deben tener turnos distintos ---
+            conflictos_turno = 0
+            if np.any(clases_por_docente >= 2):
+                for j in range(self.n_docentes):
+                    if clases_por_docente[j] >= 2:
+                        turnos = [self.clases.iloc[l]["turno"]
+                                  for l in range(self.n_clases) if XD_class[l] == j]
+                        if len(turnos) >= 2 and len(set(turnos)) < len(turnos):
+                            conflictos_turno += 1
+            g4 = conflictos_turno
 
-                if docente_idx not in docentes_turnos:
-                    docentes_turnos[docente_idx] = set()
-                else:
-                    if establecimiento in docentes_turnos[docente_idx]:
-                        f4_penalizacion_turnos += 1
-                docentes_turnos[docente_idx].add(establecimiento)
+            # --- g5: compatibilidad grado ---
+            incompat = 0
+            for i, clase_idx in enumerate(XA):
+                grado_e = self.estudiantes.iloc[i]["grado"]
+                grado_c = self.clases.iloc[clase_idx]["grado"]
+                if pd.notna(grado_e) and pd.notna(grado_c):
+                    if str(grado_e).strip() != str(grado_c).strip():
+                        incompat += 1
+            g5 = incompat
 
-            # ============================
-            # Restricciones
-            # ============================
+            # --- FO1: distancias ---
+            dist_est_prom = 0.0
+            for i, clase_idx in enumerate(XA):
+                est = self.estudiantes.iloc[i]
+                cls = self.clases.iloc[clase_idx]
+                dist_est_prom += self._hav((est["lat"], est["lng"]), (cls["lat"], cls["lng"]))
+            dist_est_prom /= max(1, self.n_estudiantes)
 
-            # G1: Capacidad excedida por clase
-            g1 = sum(
-                max(0, clases_count[i] - self.clases.iloc[i]["capacidad"])
-                for i in range(self.n_clases)
-            )
+            total_doc = 0.0
+            cnt_doc = 0
+            for l in range(self.n_clases):
+                if clase_activa[l] and XD_class[l] < self.n_docentes:
+                    cls = self.clases.iloc[l]
+                    doc = self.docentes.iloc[int(XD_class[l])]
+                    total_doc += self._hav((doc["lat"], doc["lng"]), (cls["lat"], cls["lng"]))
+                    cnt_doc += 1
+            dist_doc_prom = total_doc / max(1, cnt_doc)
+            F1 = dist_est_prom + dist_doc_prom
 
-            # G2: Docentes asignados fuera de rango (teóricamente 0)
-            g2 = sum(1 for d in asign_docentes if d >= self.n_docentes)
+            # --- FO2: balance ---
+            F2 = float(np.std(clase_alumnos))
 
-            # G3: Distancia máxima docente ↔ establecimiento (ADEE Dmax)
-            g3 = 0
-            for i in range(self.n_estudiantes):
-                docente_idx = asign_docentes[i] % self.n_docentes
-                clase_idx = asign_clases[i] % self.n_clases
-                d_docente = self._calcular_distancia(
-                    (self.docentes.iloc[docente_idx]["lat"], self.docentes.iloc[docente_idx]["lng"]),
-                    (self.clases.iloc[clase_idx]["lat"], self.clases.iloc[clase_idx]["lng"])
-                )
-                if d_docente > self.max_distance:
-                    g3 += 1
-            # ============================
-            # Salida
-            # ============================
-            out["F"] = [
-                f1_balance_clases,
-                f2_dist_estudiante_clase,
-                f3_dist_docente_establecimiento,
-                f4_penalizacion_turnos
-            ]
-            out["G"] = [g1, g2, g3]
+            # --- FO3: maximizar docentes con 2 clases en el mismo establecimiento (negativo para minimizar) ---
+            same_school = 0
+            for j in range(self.n_docentes):
+                # clases de este docente
+                idxs = [l for l in range(self.n_clases) if XD_class[l] == j]
+                if len(idxs) == 2:
+                    est1 = self.clases.iloc[idxs[0]]["establecimiento_id"]
+                    est2 = self.clases.iloc[idxs[1]]["establecimiento_id"]
+                    if pd.notna(est1) and pd.notna(est2) and int(est1) == int(est2):
+                        same_school += 1
+            F3 = - (same_school / max(1, self.n_docentes))
+
+            out["F"] = [F1, F2, F3]
+            out["G"] = [g1, g2, g3, g4, g5]
 
         except Exception as e:
-            logger.error(f"❌ Error en evaluación integrada: {e}", exc_info=True)
-            out["F"] = [1e10, 1e10, 1e10, 1e10]
-            out["G"] = [1e10, 1e10, 1e10]
+            logger.error(f"❌ Error en evaluación: {e}", exc_info=True)
+            out["F"] = [1e10, 1e10, 1e10]
+            out["G"] = [1e10, 1e10, 1e10, 1e10, 1e10]
 
-    def _calcular_distancia(self, loc1, loc2):
-        """
-        Calcula la distancia Haversine entre dos puntos geográficos.
-
-        Args:
-            loc1 (tuple): Coordenadas (lat, lng) del punto 1.
-            loc2 (tuple): Coordenadas (lat, lng) del punto 2.
-
-        Returns:
-            float: Distancia en kilómetros.
-        """
-        R = 6371  # Radio de la Tierra en km
+    @staticmethod
+    def _hav(loc1, loc2):
+        R = 6371.0
         lat1, lon1 = np.radians(loc1)
         lat2, lon2 = np.radians(loc2)
-
         dlat = lat2 - lat1
         dlon = lon2 - lon1
-        a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-        return R * c
+        a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
+        c = 2*np.arctan2(np.sqrt(a), np.sqrt(1-a))
+        return R*c
