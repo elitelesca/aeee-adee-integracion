@@ -3,7 +3,7 @@
 # Proyecto Conacyt-Uninter
 # Tutor investigador: Dr. Fabio Lopez
 # Investigador en formación: Ing. Eliana Telesca
-# Versión: 1.1
+# Versión: 1.2
 # Descripción:
 #     Contiene la lógica de optimización multiobjetivo utilizando
 #     algoritmos evolutivos (NSGA-II) y la gestión de guardado de
