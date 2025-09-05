@@ -14,19 +14,19 @@
 
 import logging
 import uuid
+import numpy as np 
 from typing import Dict, Any, Optional
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.optimize import minimize
 import psycopg2
 import psycopg2.extras
-import numpy as np
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 class DatabaseManager:
     """
-    Maneja todas las operaciones con la base de datos.
+    Maneja todas las operaciones con la base de datos PostgreSQL.
     """
     def __init__(self, db_config: Dict[str, Any]):
         """
@@ -64,43 +64,48 @@ class DatabaseManager:
 
     def save_asignaciones(self, problem, result):
         """
-        Guarda la mejor solución encontrada en la tabla asignacion_mec.
+        Guarda la mejor solución en asignacion_mec.
 
-        Args:
-            problem (IntegratedProblem): Instancia del problema optimizado.
-            result (pymoo.optimize.Result): Resultado de la optimización.
-
-        Raises:
-            Exception: Si ocurre un error durante la transacción.
+         Cromosoma en tu modelo:
+        - best_solution = [ XA(0..nE-1) , XD_class(0..nC-1) ]
+        * XA[i] = índice de clase asignada al estudiante i
+        * XD_class[l] = índice de docente asignado a la clase l
+                         (o == n_docentes para "sin docente")
         """
         try:
-            if result.F is None or len(result.F) == 0:
-                logger.error("❌ No se encontraron soluciones válidas en la optimización.")
-                return
+            # 1) Elegir mejor individuo (robusto si result.F es None)
+            best_idx, best_solution, best_F = select_best_individual(result)
 
-            factibles = int((result.G <= 0).all(axis=1).sum())
-            logger.info(f"✅ Soluciones factibles encontradas: {factibles} de {len(result.F)}") 
-
-            best_idx = result.F[:, 0].argmin()
-            best_solution = result.X[best_idx]
-
-            asign_docentes = best_solution[:problem.n_estudiantes].astype(int)
-            asign_clases = best_solution[problem.n_estudiantes:].astype(int)
+            # 2) Decodificar cromosoma según tu IntegratedProblem
+            nE = problem.n_estudiantes
+            XA = best_solution[:nE].astype(int)               # estudiante -> clase
+            XD_class = best_solution[nE:].astype(int)         # docente por clase
 
             with self.conn.cursor() as cursor:
                 cursor.execute("TRUNCATE asignacion_mec RESTART IDENTITY")
 
                 for i, est in problem.estudiantes.iterrows():
-                    docente_idx = asign_docentes[i] % problem.n_docentes
-                    clase_idx = asign_clases[i] % problem.n_clases
+                    # clase del estudiante i
+                    clase_idx = int(XA[i])
+                    cls = problem.clases.iloc[clase_idx]
+
+                    # docente asignado a esa clase
+                    docente_idx = int(XD_class[clase_idx])
+
+                    if docente_idx >= problem.n_docentes:
+                        # Fallback: si la clase está activa pero quedó "sin docente",
+                        # elegir el docente más cercano al establecimiento de la clase.
+                        best_j, best_d = 0, float("inf")
+                        for j, doc in problem.docentes.iterrows():
+                            d = problem._hav((doc["lat"], doc["lng"]), (cls["lat"], cls["lng"]))
+                            if d < best_d:
+                                best_d, best_j = d, j
+                        docente_idx = int(best_j)
 
                     docente = problem.docentes.iloc[docente_idx]
-                    clase = problem.clases.iloc[clase_idx]
 
-                    distancia = problem._calcular_distancia(
-                        (est["lat"], est["lng"]),
-                        (clase["lat"], clase["lng"])
-                    )
+                    # Distancia estudiante -> establecimiento de la clase
+                    distancia = problem._hav((est["lat"], est["lng"]), (cls["lat"], cls["lng"]))
 
                     cursor.execute("""
                         INSERT INTO asignacion_mec
@@ -109,19 +114,52 @@ class DatabaseManager:
                     """, (
                         int(est["estudiante_id"]),
                         int(docente["docente_id"]),
-                        int(clase["establecimiento_id"]),
-                        int(clase["institucion_id"]),
-                        clase["grado"],
-                        "A",  # Se puede mejorar en el futuro
-                        clase["turno"],
+                        int(cls["establecimiento_id"]),
+                        int(cls["institucion_id"]),
+                        cls["grado"],
+                        "A",
+                        cls["turno"],
                         float(distancia)
                     ))
             self.conn.commit()
             logger.info("✅ Asignaciones guardadas correctamente en asignacion_mec")
         except Exception as e:
-            self.conn.rollback()
+            if self.conn:
+                self.conn.rollback()
             logger.error(f"❌ Error al guardar asignaciones: {e}", exc_info=True)
             raise
+
+def _extract_FX(result):
+    """
+    Devuelve (F, X) desde result.F/result.X o, si vienen None,
+    desde result.opt (o result.pop).
+    """
+    F = getattr(result, "F", None)
+    X = getattr(result, "X", None)
+    if F is not None and X is not None:
+        return F, X
+
+    pop = getattr(result, "opt", None) or getattr(result, "pop", None)
+    if pop is None:
+        raise ValueError("Resultado vacío: no hay F/X ni opt/pop.")
+    F = pop.get("F")
+    X = pop.get("X")
+    if F is None or X is None:
+        raise ValueError("No se pudieron extraer F/X del resultado.")
+    return F, X
+
+# Reemplaza select_best_individual en integrated_optimization.py
+def select_best_individual(result):
+    import numpy as np
+    F, X = _extract_FX(result)
+    F = np.atleast_2d(F)
+    if F.shape[0] == 1:
+        best_idx = 0
+    else:
+        # Orden lexicográfico: F1, luego F2, luego (si existe) F3
+        keys = [F[:, 1], F[:, 0]] if F.shape[1] == 2 else [F[:, 2], F[:, 1], F[:, 0]]
+        best_idx = np.lexsort(tuple(keys))[0]
+    return best_idx, X[best_idx], F[best_idx]
 
 
 def run_integrated_optimization(
@@ -147,7 +185,7 @@ def run_integrated_optimization(
 
     Returns:
         pymoo.optimize.Result: Resultados de la optimización.
-    """    
+    """
     algorithm = NSGA2(pop_size=pop_size, eliminate_duplicates=True)
 
     result = minimize(
@@ -159,17 +197,6 @@ def run_integrated_optimization(
         save_history=True,
         n_jobs=1
     )
-    if result.F is not None and len(result.F) > 0:
-        best_idx = result.F[:, 0].argmin()
-        logger.info(
-            f"🏆 Mejor solución: "
-            f"Balance Clases={result.F[best_idx,0]:.2f}, "
-            f"Dist Estudiantes={result.F[best_idx,1]:.2f} km, "
-            f"Dist Docentes={result.F[best_idx,2]:.2f} km, "
-            f"Penalización Turnos={result.F[best_idx,3]:.2f}"
-        )
-    else:
-        logger.warning("⚠️ Optimización completada, pero no hay soluciones válidas.")
 
     if db_config:
         db_manager = DatabaseManager(db_config)
