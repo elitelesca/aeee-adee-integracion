@@ -1,206 +1,283 @@
 # ================================================================
-# integrated_problem.py
+# integrated_problem.py 
 # Proyecto Conacyt-Uninter
-# Tutor investigador: Dr. Fabio Lopez 
-# Investigador en formacion: Ing. Eliana Telesca
-# Versión: 1.1
-# Descripción:
-#     Define el problema de optimización multiobjetivo para la
-#     asignación de estudiantes a docentes y clases, minimizando
-#     distancias y balanceando cargas.
-# Dependencias:
-#     numpy, pandas, pymoo, logging
+# Tutor investigador: Dr. Fabio Lopez
+# Investigador en formación: Ing. Eliana Telesca
+# Versión: 1.3
+#
+# Descripción del módulo
+# --------------
+# Define el problema de optimización multiobjetivo para el asignador
+# educativo usando Pymoo. Modela:
+#   - Variables de decisión:
+#       * XA: Para cada estudiante, el índice de clase asignada.
+#       * XD_class: Para cada clase, el índice de docente asignado.
+#         Nota: El valor == n_docentes indica "SIN DOCENTE" (solo válido
+#               cuando la clase está inactiva, es decir, sin alumnos).
+#   - Objetivos (F):
+#       * F1: Distancia promedio estudiantes→establecimientos + 
+#             distancia promedio docentes→establecimientos (solo clases activas).
+#       * F2: Desvío estándar (std) del número de alumnos por clase
+#             (minimizar → balancear carga).
+#       * F3: -(proporción de docentes con exactamente 2 clases en el
+#              MISMO establecimiento). Se usa negativo para poder minimizar.
+#   - Restricciones (G >= 0 viola):
+#       * g1: Exceso total de capacidad (sumatoria de overflow).
+#       * g2: Clases activas sin docente asignado.
+#       * g3: Docentes con más de 2 clases.
+#       * g4: Si un docente tiene 2 clases, sus turnos deben ser distintos.
+#       * g5: Incompatibilidades de grado (estudiante vs. clase).
+#
+# Dependencias clave:
+#   - numpy, pandas, logging
+#   - pymoo.core.problem.ElementwiseProblem
 # ================================================================
+
 import numpy as np
 from pymoo.core.problem import ElementwiseProblem
 import logging
 import pandas as pd
 
+# Logger específico del módulo (evita ruido de otros módulos)
 logger = logging.getLogger("integrated_problem")
 logger.setLevel(logging.INFO)
 
+
 class IntegratedProblem(ElementwiseProblem):
     """
-    Decisión:
-      - XA: n_estudiantes enteros en [0, n_clases-1]  => estudiante -> clase
-      - XD_class: n_clases enteros en [0, n_docentes] => docente por clase
-            * n_docentes = "SIN DOCENTE" (solo permitido si la clase no tiene alumnos)
+    Problema de optimización multiobjetivo para asignaciones educativas.
+
+    Variables:
+      - XA: vector de longitud n_estudiantes con enteros en [0, n_clases-1].
+      - XD_class: vector de longitud n_clases con enteros en [0, n_docentes]
+                  siendo n_docentes un valor centinela que significa "SIN DOCENTE".
+
     Objetivos:
-      - F1: Distancia promedio (estudiante->establecimiento) + (docente->establecimiento en clases activas)
-      - F2: Desvío estándar de carga (alumnos por clase)
-      - F3: -(proporción de docentes con 2 clases en el mismo establecimiento)  [se minimiza]
+      - F1: Distancia promedio estudiantes + docentes.
+      - F2: Desvío estándar de alumnos por clase (balanceo).
+      - F3: Negativo de la proporción de docentes con 2 clases en el MISMO establecimiento.
+
     Restricciones (G >= 0 viola):
-      - g1: Exceso de capacidad por clase (suma de overflow)
-      - g2: Clases activas sin docente asignado
-      - g3: Docentes con más de 2 clases asignadas
-      - g4: Si un docente tiene 2 clases, turnos deben ser distintos
-      - g5: Incompatibilidades grado (estudiante != grado clase)
+      - g1: Suma de excesos de capacidad por clase.
+      - g2: Clase activa sin docente asignado.
+      - g3: Docentes con más de 2 clases.
+      - g4: Mismo docente con 2 clases en turnos iguales.
+      - g5: Estudiante asignado a clase de otro grado.
     """
 
-    def __init__(self, estudiantes, docentes, clases):
+    def __init__(self, estudiantes: pd.DataFrame, docentes: pd.DataFrame, clases: pd.DataFrame):
+        """
+        Inicializa el problema validando la presencia de datos y columnas mínimas.
+
+        Args:
+            estudiantes: df con columnas mínimas {'lat','lng','nombre','grado', ...}
+            docentes:    df con columnas mínimas {'lat','lng','nombre', ...}
+            clases:      df con columnas mínimas {'lat','lng','grado','turno','capacidad',
+                                                  'establecimiento_id','institucion_id', ...}
+
+        Raises:
+            ValueError: si algún DataFrame está vacío o faltan columnas requeridas.
+        """
+        # 1) Verificación de no vacíos (evita fallos aguas abajo)
         if estudiantes.empty or docentes.empty or clases.empty:
             raise ValueError("❌ Los DataFrames de entrada no pueden estar vacíos")
 
+        # 2) Índices limpios (previene efectos colaterales con posiciones)
         estudiantes = estudiantes.reset_index(drop=True)
-        docentes = docentes.reset_index(drop=True)
-        clases = clases.reset_index(drop=True)
+        docentes    = docentes.reset_index(drop=True)
+        clases      = clases.reset_index(drop=True)
 
+        # 3) Validación de esquema mínimo
         self._validar_dataframes(estudiantes, docentes, clases)
 
+        # 4) Guarda referencias y tallas del problema
         self.estudiantes = estudiantes
-        self.docentes = docentes
-        self.clases = clases
+        self.docentes    = docentes
+        self.clases      = clases
 
         self.n_estudiantes = len(estudiantes)
-        self.n_docentes = len(docentes)
-        self.n_clases = len(clases)
+        self.n_docentes    = len(docentes)
+        self.n_clases      = len(clases)
 
-        # Vector de decisión: XA (n_est), XD_class (n_clases)
+        # 5) Dimensión del vector de decisión: [XA | XD_class]
         n_var = self.n_estudiantes + self.n_clases
 
+        # 6) Límites inferiores/superiores (enteros)
+        #    XA: clases [0 .. n_clases-1]
+        #    XD: docentes [0 .. n_docentes] (el último es "sin docente")
         xl = np.concatenate([
             np.zeros(self.n_estudiantes, dtype=int),
             np.zeros(self.n_clases, dtype=int)
         ])
         xu = np.concatenate([
             np.full(self.n_estudiantes, self.n_clases - 1, dtype=int),
-            np.full(self.n_clases, self.n_docentes, dtype=int)  # include "sin docente"
+            np.full(self.n_clases, self.n_docentes, dtype=int)
         ])
 
+        # 7) Inicializa el problema base de Pymoo
         super().__init__(
             n_var=n_var,
-            n_obj=3,            # <<<<<<<<<<<<< antes: 2
-            n_constr=5,
+            n_obj=3,            # F1, F2, F3
+            n_constr=5,         # g1..g5
             xl=xl,
             xu=xu,
-            elementwise=True
+            elementwise=True    # _evaluate se llama por individuo
         )
 
-    def _validar_dataframes(self, estudiantes, docentes, clases):
-        req_est = {'lat', 'lng', 'nombre', 'grado'}
-        req_doc = {'lat', 'lng', 'nombre'}
-        req_cls = {'lat', 'lng', 'grado', 'turno', 'capacidad', 'establecimiento_id', 'institucion_id'}
+    def _validar_dataframes(self, estudiantes: pd.DataFrame, docentes: pd.DataFrame, clases: pd.DataFrame):
+        """
+        Verifica que existan las columnas mínimas necesarias para el cálculo
+        de objetivos y restricciones. Si falta alguna, acumula y lanza error.
+        """
+        columnas_requeridas_est = {'lat', 'lng', 'nombre', 'grado'}
+        columnas_requeridas_doc = {'lat', 'lng', 'nombre'}
+        columnas_requeridas_cls = {'lat', 'lng', 'grado', 'turno', 'capacidad',
+                                   'establecimiento_id', 'institucion_id'}
 
-        def faltantes(df, req):
+        def faltantes(df: pd.DataFrame, req: set) -> set:
             return req - set(df.columns)
 
-        me = faltantes(estudiantes, req_est)
-        md = faltantes(docentes, req_doc)
-        mc = faltantes(clases, req_cls)
-
         errores = []
-        if me: errores.append(f"Estudiantes faltan columnas: {me}")
-        if md: errores.append(f"Docentes faltan columnas: {md}")
-        if mc: errores.append(f"Clases faltan columnas: {mc}")
+        fe = faltantes(estudiantes, columnas_requeridas_est)
+        fd = faltantes(docentes,    columnas_requeridas_doc)
+        fc = faltantes(clases,      columnas_requeridas_cls)
+        if fe: errores.append(f"Estudiantes faltan columnas: {fe}")
+        if fd: errores.append(f"Docentes faltan columnas: {fd}")
+        if fc: errores.append(f"Clases faltan columnas: {fc}")
+
         if errores:
+            # Se detalla todo en un único mensaje para acortar ciclo de corrección
             raise ValueError("❌ " + " | ".join(errores))
 
     def _evaluate(self, x, out, *args, **kwargs):
+        """
+        Evalúa un individuo (vector x) y produce:
+            - out["F"] = [F1, F2, F3]
+            - out["G"] = [g1, g2, g3, g4, g5]
+
+        Notas:
+            * Se protege con try/except para evitar que una excepción
+              rompa toda la corrida (penalización alta si hay error).
+        """
         try:
-            nE = self.n_estudiantes
-            XA = x[:nE].astype(int)              # estudiante -> clase
-            XD_class = x[nE:].astype(int)        # docente por clase (n_docentes = sin docente)
+            # ----- Decodificación del vector de decisión -----
+            n_est = self.n_estudiantes
+            XA = x[:n_est].astype(int)           # asignaciones de estudiantes → clases
+            XD = x[n_est:].astype(int)           # asignaciones de clases → docentes
 
-            # --- Cargas por clase y activación ---
-            clase_alumnos = np.zeros(self.n_clases, dtype=int)
+            # ----- Carga por clase y clases activas -----
+            alumnos_por_clase = np.zeros(self.n_clases, dtype=int)
             for i, clase_idx in enumerate(XA):
-                clase_alumnos[clase_idx] += 1
-            clase_activa = clase_alumnos > 0
+                alumnos_por_clase[clase_idx] += 1
+            clase_activa = alumnos_por_clase > 0  # True si tiene ≥1 alumno
 
-            # --- g1: capacidad ---
-            overflow = 0.0
-            for l in range(self.n_clases):
-                cap = int(self.clases.iloc[l]["capacidad"])
-                if clase_alumnos[l] > cap:
-                    overflow += (clase_alumnos[l] - cap)
-            g1 = overflow
+            # ========== Restricciones ==========
+            # g1) Exceso de capacidad total (sumatoria de overflow)
+            exceso_total = 0.0
+            for clase_idx in range(self.n_clases):
+                cap = int(self.clases.iloc[clase_idx]["capacidad"])
+                overflow = alumnos_por_clase[clase_idx] - cap
+                if overflow > 0:
+                    exceso_total += overflow
+            g1 = exceso_total
 
-            # --- g2: clase activa sin docente ---
-            sin_docente_activas = 0
-            for l in range(self.n_clases):
-                if clase_activa[l] and XD_class[l] == self.n_docentes:
-                    sin_docente_activas += 1
-            g2 = sin_docente_activas
+            # g2) Clases activas sin docente (XD == n_docentes)
+            clases_sin_docente = 0
+            for clase_idx in range(self.n_clases):
+                if clase_activa[clase_idx] and XD[clase_idx] == self.n_docentes:
+                    clases_sin_docente += 1
+            g2 = clases_sin_docente
 
-            # --- g3: máx 2 clases por docente ---
+            # g3) Docente con más de 2 clases
             clases_por_docente = np.zeros(self.n_docentes, dtype=int)
-            for l in range(self.n_clases):
-                d = XD_class[l]
-                if d < self.n_docentes:
+            for clase_idx in range(self.n_clases):
+                d = XD[clase_idx]
+                if d < self.n_docentes:  # ignora el centinela "sin docente"
                     clases_por_docente[d] += 1
-            exceso_doc = np.sum(np.maximum(0, clases_por_docente - 2))
-            g3 = exceso_doc
+            exceso_clases = np.sum(np.maximum(0, clases_por_docente - 2))
+            g3 = exceso_clases
 
-            # --- g4: 2 clases de un docente deben tener turnos distintos ---
+            # g4) Si un docente tiene 2 clases, turnos deben ser distintos
             conflictos_turno = 0
             if np.any(clases_por_docente >= 2):
-                for j in range(self.n_docentes):
-                    if clases_por_docente[j] >= 2:
-                        turnos = [self.clases.iloc[l]["turno"]
-                                  for l in range(self.n_clases) if XD_class[l] == j]
+                for d in range(self.n_docentes):
+                    if clases_por_docente[d] >= 2:
+                        turnos = [self.clases.iloc[k]["turno"]
+                                  for k in range(self.n_clases)
+                                  if XD[k] == d]
+                        # Si hay al menos dos y no todos son distintos → conflicto
                         if len(turnos) >= 2 and len(set(turnos)) < len(turnos):
                             conflictos_turno += 1
             g4 = conflictos_turno
 
-            # --- g5: compatibilidad grado ---
+            # g5) Grado estudiante ≠ grado clase
             incompat = 0
             for i, clase_idx in enumerate(XA):
-                grado_e = self.estudiantes.iloc[i]["grado"]
-                grado_c = self.clases.iloc[clase_idx]["grado"]
-                if pd.notna(grado_e) and pd.notna(grado_c):
-                    if str(grado_e).strip() != str(grado_c).strip():
+                ge = self.estudiantes.iloc[i]["grado"]
+                gc = self.clases.iloc[clase_idx]["grado"]
+                if pd.notna(ge) and pd.notna(gc):
+                    if str(ge).strip() != str(gc).strip():
                         incompat += 1
             g5 = incompat
 
-            # --- FO1: distancias ---
-            dist_est_prom = 0.0
+            # ========== Objetivos ==========
+            # F1) Distancias: estudiantes promedio + docentes promedio (solo clases activas con docente real)
+            dist_est_total = 0.0
             for i, clase_idx in enumerate(XA):
-                est = self.estudiantes.iloc[i]
-                cls = self.clases.iloc[clase_idx]
-                dist_est_prom += self._hav((est["lat"], est["lng"]), (cls["lat"], cls["lng"]))
-            dist_est_prom /= max(1, self.n_estudiantes)
+                est   = self.estudiantes.iloc[i]
+                clase = self.clases.iloc[clase_idx]
+                dist_est_total += self._hav((est["lat"], est["lng"]),
+                                            (clase["lat"], clase["lng"]))
+            dist_est_prom = dist_est_total / max(1, self.n_estudiantes)
 
-            total_doc = 0.0
-            cnt_doc = 0
-            for l in range(self.n_clases):
-                if clase_activa[l] and XD_class[l] < self.n_docentes:
-                    cls = self.clases.iloc[l]
-                    doc = self.docentes.iloc[int(XD_class[l])]
-                    total_doc += self._hav((doc["lat"], doc["lng"]), (cls["lat"], cls["lng"]))
+            dist_doc_total, cnt_doc = 0.0, 0
+            for clase_idx in range(self.n_clases):
+                d = XD[clase_idx]
+                if clase_activa[clase_idx] and d < self.n_docentes:
+                    clase  = self.clases.iloc[clase_idx]
+                    doc    = self.docentes.iloc[int(d)]
+                    dist_doc_total += self._hav((doc["lat"], doc["lng"]),
+                                                (clase["lat"], clase["lng"]))
                     cnt_doc += 1
-            dist_doc_prom = total_doc / max(1, cnt_doc)
+            dist_doc_prom = dist_doc_total / max(1, cnt_doc)
             F1 = dist_est_prom + dist_doc_prom
 
-            # --- FO2: balance ---
-            F2 = float(np.std(clase_alumnos))
+            # F2) Balance de carga (std alumnos/clase)
+            F2 = float(np.std(alumnos_por_clase))
 
-            # --- FO3: maximizar docentes con 2 clases en el mismo establecimiento (negativo para minimizar) ---
-            same_school = 0
-            for j in range(self.n_docentes):
-                # clases de este docente
-                idxs = [l for l in range(self.n_clases) if XD_class[l] == j]
-                if len(idxs) == 2:
-                    est1 = self.clases.iloc[idxs[0]]["establecimiento_id"]
-                    est2 = self.clases.iloc[idxs[1]]["establecimiento_id"]
-                    if pd.notna(est1) and pd.notna(est2) and int(est1) == int(est2):
-                        same_school += 1
-            F3 = - (same_school / max(1, self.n_docentes))
+            # F3) Negativo de la proporción de docentes con 2 clases en el MISMO establecimiento
+            docentes_mismo_est = 0
+            for d in range(self.n_docentes):
+                # Clases asignadas al docente d
+                clases_d = [k for k in range(self.n_clases) if XD[k] == d]
+                if len(clases_d) == 2:
+                    e1 = self.clases.iloc[clases_d[0]]["establecimiento_id"]
+                    e2 = self.clases.iloc[clases_d[1]]["establecimiento_id"]
+                    if pd.notna(e1) and pd.notna(e2) and int(e1) == int(e2):
+                        docentes_mismo_est += 1
+            F3 = - (docentes_mismo_est / max(1, self.n_docentes))
 
+            # Salida para Pymoo
             out["F"] = [F1, F2, F3]
             out["G"] = [g1, g2, g3, g4, g5]
 
         except Exception as e:
+            # Penalización grande para evitar que una excepción invalide toda la corrida
             logger.error(f"❌ Error en evaluación: {e}", exc_info=True)
             out["F"] = [1e10, 1e10, 1e10]
             out["G"] = [1e10, 1e10, 1e10, 1e10, 1e10]
 
     @staticmethod
-    def _hav(loc1, loc2):
-        R = 6371.0
+    def _hav(loc1, loc2) -> float:
+        """
+        Distancia Haversine entre dos puntos (lat, lng) en kilómetros.
+        Usa radio medio de la Tierra = 6371 km.
+        """
+        RADIO_TIERRA = 6371.0
         lat1, lon1 = np.radians(loc1)
         lat2, lon2 = np.radians(loc2)
         dlat = lat2 - lat1
         dlon = lon2 - lon1
-        a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
-        c = 2*np.arctan2(np.sqrt(a), np.sqrt(1-a))
-        return R*c
+        a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
+        c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+        return RADIO_TIERRA * c
