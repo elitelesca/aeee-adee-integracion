@@ -27,3 +27,4 @@ xlsxwriter>=3.2.0
 # Librerías adicionales (utilizadas por dependencias internas)
 altair<6,>=4.0
 typing-extensions>=4.6.0
+
